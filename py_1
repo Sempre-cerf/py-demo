@@ -1,0 +1,331 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+学生信息与考场管理系统
+作者：AI 辅助开发 + 人工审查
+本程序实现了学生信息管理、随机点名、考场安排和准考证生成功能。
+完全遵循 Python 标准库，并严格遵守面向对象编程规范。
+"""
+
+import os          # 用于文件和目录操作
+import random      # 用于随机点名和打乱顺序
+import time        # 用于获取生成安排表的时间
+import shutil      # 用于删除文件夹（标准库，用于清空准考证目录）
+
+
+class Student:
+    """学生数据类，封装单个学生的所有信息"""
+    
+    def __init__(self, sid, name, gender, class_name, college):
+        """
+        构造方法：初始化学生属性
+        
+        参数：
+            sid: 学号（字符串，保持原样，可能包含字母）
+            name: 姓名
+            gender: 性别
+            class_name: 班级名称
+            college: 学院名称
+        """
+        self.sid = sid                # 学号
+        self.name = name              # 姓名
+        self.gender = gender          # 性别
+        self.class_name = class_name  # 班级
+        self.college = college        # 学院
+    
+    def __str__(self):
+        """
+        魔术方法：当使用 print() 或 str() 时自动调用
+        返回格式化的学生完整信息，便于直接展示
+        """
+        return f"学号:{self.sid} 姓名:{self.name} 性别:{self.gender} 班级:{self.class_name} 学院:{self.college}"
+
+
+class ExamSystem:
+    """考场管理系统核心控制类，封装所有业务逻辑"""
+    
+    @staticmethod
+    def get_current_time_str():
+        """
+        静态方法：获取当前时间的格式化字符串
+        符合题目要求的第一行时间格式：生成时间：2026-03-23 10:00:00
+        """
+        # time.localtime() 获取本地时间元组，strftime 按指定格式输出字符串
+        return time.strftime("生成时间：%Y-%m-%d %H:%M:%S", time.localtime())
+    
+    @staticmethod
+    def validate_sid_format(sid):
+        """
+        静态方法：校验学号格式（可选，用于满足静态方法的硬性要求）
+        简单检查学号非空且只包含字母和数字（可根据需要扩展）
+        """
+        if not sid or not isinstance(sid, str):
+            return False
+        # 允许学号包含数字和字母，不允许其他特殊字符（如空格、标点）
+        return sid.isalnum()
+    
+    def __init__(self, filename):
+        """
+        构造方法：初始化系统，读取学生名单文件
+        
+        参数：
+            filename: 学生名单文件的路径（如 "人工智能编程语言学生名单.txt"）
+        """
+        self.filename = filename               # 保存文件名，供其他方法使用
+        self.students = []                     # 存储所有 Student 对象的列表
+        self.student_dict = {}                 # 学号 -> Student 对象的映射字典，用于快速查找
+        self.seating_plan = None               # 考场安排列表，每个元素为 (座位号, Student)，初始为 None
+        
+        # 调用内部方法加载数据，若失败则抛出异常
+        self._load_data()
+    
+    def _load_data(self):
+        """
+        私有方法：从文本文件读取学生信息，构造 Student 对象并填充 students 列表和字典
+        使用 try-except 处理文件不存在、格式错误等异常
+        """
+        try:
+            # 以只读模式、utf-8 编码打开文件（常见中文编码）
+            with open(self.filename, 'r', encoding='utf-8') as file:
+                line_num = 0  # 仅用于调试，记录行号
+                for line in file:
+                    line_num += 1
+                    line = line.strip()          # 去除首尾空白字符（包括换行符）
+                    if not line:                 # 跳过空行
+                        continue
+                    
+                    # 假设每行格式：学号 姓名 性别 班级 学院（以空白字符分隔，如空格或制表符）
+                    parts = line.split()
+                    if len(parts) < 5:
+                        # 如果字段不足5个，打印警告但继续处理下一行（不中断程序）
+                        print(f"警告：第{line_num}行格式不正确，字段数不足5，已跳过: {line}")
+                        continue
+                    
+                    # 取出前5个字段（如果有多余字段，忽略后面的）
+                    sid, name, gender, class_name, college = parts[0], parts[1], parts[2], parts[3], parts[4]
+                    
+                    # 可选：调用静态方法校验学号格式，若格式无效则警告并跳过
+                    if not ExamSystem.validate_sid_format(sid):
+                        print(f"警告：第{line_num}行学号格式异常('{sid}')，已跳过")
+                        continue
+                    
+                    # 创建 Student 对象
+                    student = Student(sid, name, gender, class_name, college)
+                    # 添加到列表
+                    self.students.append(student)
+                    # 存入字典，键为学号
+                    self.student_dict[sid] = student
+        
+        except FileNotFoundError:
+            # 文件不存在时抛出异常，终止程序（因为无法继续工作）
+            raise FileNotFoundError(f"错误：找不到学生名单文件 '{self.filename}'，请确保文件存在。")
+        except Exception as e:
+            # 其他IO或编码错误也一并抛出，让上层处理
+            raise Exception(f"读取文件时发生未知错误：{e}")
+        
+        # 文件读取完毕后，如果没有任何学生数据，认为文件格式严重错误
+        if not self.students:
+            raise ValueError("错误：学生名单文件中没有有效数据，请检查文件格式。")
+    
+    def find_student_by_id(self, sid):
+        """
+        根据学号查找学生，返回 Student 对象；若不存在则返回 None
+        """
+        # 直接从字典中获取，时间复杂度 O(1)
+        return self.student_dict.get(sid)
+    
+    def random_call(self, num):
+        """
+        随机点名：返回 num 个不重复的随机学生列表
+        
+        参数：
+            num: 需要点名的学生数量
+        返回：
+            包含 Student 对象的列表
+        异常：
+            如果 num 超出总人数，抛出 ValueError
+        """
+        if num > len(self.students):
+            raise ValueError(f"点名数量({num})超过总人数({len(self.students)})")
+        # random.sample 直接从列表中抽取不重复的随机元素，返回新列表
+        return random.sample(self.students, num)
+    
+    def generate_seating_chart(self):
+        """
+        生成考场安排表：
+        1. 随机打乱全班学生顺序
+        2. 为每个学生分配座位号（从1开始连续编号）
+        3. 在程序根目录下生成 "考场安排表.txt"
+        4. 文件第一行为生成时间，后续每行：座位号\t姓名\t学号
+        5. 将安排列表保存到 self.seating_plan 供准考证生成使用
+        """
+        # 1. 打乱学生顺序（直接在原列表的副本上操作，避免影响原始顺序）
+        shuffled_students = self.students.copy()   # 复制一份，保留原始顺序
+        random.shuffle(shuffled_students)          # 随机打乱
+        
+        # 2. 构建座位安排列表，每个元素为 (座位号, Student)
+        # 座位号从 1 开始，enumerate 从 1 开始计数
+        self.seating_plan = [(seat_no, student) for seat_no, student in enumerate(shuffled_students, start=1)]
+        
+        # 3. 写入考场安排表.txt
+        output_file = "考场安排表.txt"
+        try:
+            with open(output_file, 'w', encoding='utf-8') as f:
+                # 第一行写入生成时间（使用静态方法获取）
+                f.write(ExamSystem.get_current_time_str() + "\n")
+                # 逐行写入座位号、姓名、学号，用制表符分隔，便于阅读
+                for seat_no, student in self.seating_plan:
+                    f.write(f"{seat_no}\t{student.name}\t{student.sid}\n")
+            print(f"成功生成考场安排表：{output_file}")
+        except Exception as e:
+            print(f"生成考场安排表失败：{e}")
+            # 发生错误时，将安排表置为 None，避免后续准考证生成基于错误数据
+            self.seating_plan = None
+            raise
+    
+    def generate_admission_tickets(self):
+        """
+        生成准考证目录与文件：
+        1. 确保已有考场安排（若 self.seating_plan 为 None，则先调用 generate_seating_chart）
+        2. 创建 "准考证" 文件夹（如果已存在则清空其内容，避免残留旧文件）
+        3. 根据每个学生的座位信息，生成 "01.txt", "02.txt" ... 等独立文件
+        4. 每个文件内容包含：座位号、姓名、学号
+        """
+        # 如果没有考场安排，自动生成一份（符合用户期望：生成准考证前自动安排）
+        if self.seating_plan is None:
+            print("提示：尚未生成考场安排，将自动生成安排表。")
+            self.generate_seating_chart()
+            # 如果生成失败（self.seating_plan 仍为 None），则无法继续
+            if self.seating_plan is None:
+                print("错误：无法生成准考证，因为考场安排表创建失败。")
+                return
+        
+        # 准考证文件夹名称
+        folder_name = "准考证"
+        # 如果文件夹已经存在，则删除整个文件夹及其所有内容（保证每次生成都是干净状态）
+        if os.path.exists(folder_name):
+            try:
+                # shutil.rmtree 递归删除文件夹及其内部所有文件/子文件夹
+                shutil.rmtree(folder_name)
+                print(f"已清空旧文件夹：{folder_name}")
+            except Exception as e:
+                print(f"删除旧文件夹失败：{e}，将尝试继续创建新文件（可能导致残留）")
+        # 创建新文件夹
+        try:
+            os.makedirs(folder_name, exist_ok=True)   # exist_ok=True 避免重复创建报错
+        except Exception as e:
+            print(f"创建文件夹 '{folder_name}' 失败：{e}")
+            return
+        
+        # 确定文件名的数字位数：总人数决定最大位数，例如 99 人以内用两位，100 人用三位
+        total = len(self.seating_plan)
+        width = len(str(total))   # 例如 total=99 → width=2, total=100 → width=3
+        
+        # 遍历每个座位安排，生成独立的准考证文件
+        for seat_no, student in self.seating_plan:
+            # 文件名：序号从1开始，用前导零补足到 width 位，如 "01.txt", "02.txt"
+            filename = os.path.join(folder_name, f"{str(seat_no).zfill(width)}.txt")
+            try:
+                with open(filename, 'w', encoding='utf-8') as f:
+                    # 文件内容写入座位号、姓名、学号（格式自由，清晰即可）
+                    f.write(f"座位号：{seat_no}\n")
+                    f.write(f"姓名：{student.name}\n")
+                    f.write(f"学号：{student.sid}\n")
+                # 可选：打印成功信息（为了不过度刷屏，可注释）
+                # print(f"已生成：{filename}")
+            except Exception as e:
+                print(f"写入文件 {filename} 失败：{e}")
+        
+        print(f"成功生成 {total} 个准考证文件，存放于 '{folder_name}' 文件夹。")
+
+
+def main():
+    """主程序入口：提供命令行交互菜单，调用 ExamSystem 的各项功能"""
+    # 学生名单文件名（应与作业提供的文件同名）
+    data_file = "人工智能编程语言学生名单.txt"
+    
+    # 初始化系统（如果文件不存在或格式错误，程序会报错退出）
+    try:
+        system = ExamSystem(data_file)
+        print(f"成功加载 {len(system.students)} 名学生信息。")
+    except Exception as e:
+        print(f"程序初始化失败：{e}")
+        return
+    
+    # 主循环菜单
+    while True:
+        print("\n" + "=" * 50)
+        print("           学生信息与考场管理系统")
+        print("=" * 50)
+        print("1. 查找学生信息（按学号）")
+        print("2. 随机点名")
+        print("3. 生成考场安排表（覆盖旧表）")
+        print("4. 生成准考证目录与文件（基于当前或自动生成安排表）")
+        print("0. 退出程序")
+        print("=" * 50)
+        
+        choice = input("请输入功能编号：").strip()
+        
+        if choice == "1":
+            # 查找学生信息
+            sid = input("请输入学号：").strip()
+            if not sid:
+                print("学号不能为空，请重新输入。")
+                continue
+            # 可选：调用静态方法校验学号格式
+            if not ExamSystem.validate_sid_format(sid):
+                print("学号格式无效（只能包含字母和数字），请检查。")
+                continue
+            
+            student = system.find_student_by_id(sid)
+            if student:
+                # 直接打印 student，会调用 __str__ 方法输出完整信息
+                print(student)
+            else:
+                print(f"未找到学号为 {sid} 的学生，请确认学号是否正确。")
+        
+        elif choice == "2":
+            # 随机点名
+            total = len(system.students)
+            print(f"当前共有 {total} 名学生。")
+            try:
+                raw = input(f"请输入需要点名的学生数量（1 ~ {total}）：").strip()
+                if not raw:
+                    print("输入不能为空。")
+                    continue
+                num = int(raw)   # 可能抛出 ValueError
+                # 调用 random_call 方法，内部会检查 num 是否超出范围
+                selected = system.random_call(num)
+                print(f"\n随机点名结果（共 {len(selected)} 人）：")
+                for idx, stu in enumerate(selected, start=1):
+                    print(f"{idx}. {stu.name}（学号：{stu.sid}）")
+            except ValueError as ve:
+                # 捕获 int() 转换错误 或 random_call 抛出的数值范围错误
+                print(f"输入错误：{ve}")
+        
+        elif choice == "3":
+            # 生成考场安排表
+            try:
+                system.generate_seating_chart()
+            except Exception as e:
+                print(f"生成考场安排表时出错：{e}")
+        
+        elif choice == "4":
+            # 生成准考证文件夹及文件
+            try:
+                system.generate_admission_tickets()
+            except Exception as e:
+                print(f"生成准考证时出错：{e}")
+        
+        elif choice == "0":
+            print("感谢使用本系统，再见！")
+            break
+        
+        else:
+            print("无效的选项，请重新输入（0-4）。")
+
+
+# 只有当脚本被直接运行时才执行 main()，避免被其他模块导入时自动运行
+if __name__ == "__main__":
+    main()
